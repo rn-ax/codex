@@ -1145,6 +1145,7 @@ impl App {
             match event {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, app_server, key_event).await;
+                    self.sync_iterm_selected_thread_id();
                 }
                 TuiEvent::Paste(pasted) => {
                     // Pasted text may contain CRLF pairs or bare CRs (e.g., from iTerm2),
@@ -1176,6 +1177,9 @@ impl App {
                     }
                 }
                 TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {
+                    if matches!(event, TuiEvent::Resume) {
+                        self.sync_iterm_selected_thread_id();
+                    }
                     if self.backtrack_render_pending && !tui.is_owned_screen() {
                         self.rebuild_transcript_after_backtrack(tui, screen_size.into())?;
                         self.backtrack_render_pending = false;

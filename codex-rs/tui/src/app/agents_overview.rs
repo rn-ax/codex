@@ -101,6 +101,7 @@ impl App {
         let view = self.agents_overview_view(threads, selected_thread_id);
         self.agents_overview.visible_thread_ids = view.thread_ids();
         self.chat_widget.show_bottom_pane_view(Box::new(view));
+        self.sync_iterm_selected_thread_id();
         if self.reconnect.offline {
             self.reconnect.presentation = reconnect::ReconnectPresentation::Overview;
             let mut state = self

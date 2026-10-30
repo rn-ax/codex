@@ -262,11 +262,31 @@ impl App {
     /// intentionally hidden until there is more than one known thread so single-thread sessions do
     /// not spend footer space restating that the user is already on the main conversation.
     pub(super) fn sync_active_agent_label(&mut self) {
+        self.sync_iterm_selected_thread_id();
         let label = self
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
         self.sync_side_thread_ui();
+    }
+
+    pub(super) fn sync_iterm_selected_thread_id(&self) {
+        let selected_index = self
+            .chat_widget
+            .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
+            .or_else(|| {
+                self.chat_widget
+                    .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+            });
+        let selected_thread_id = selected_index
+            .and_then(|index| self.agents_overview.visible_thread_ids.get(index).copied())
+            .or_else(|| self.current_displayed_thread_id());
+        let thread_id = selected_thread_id.map(|thread_id| thread_id.to_string());
+        if let Err(err) =
+            crate::terminal_program_status::set_iterm_current_thread_id(thread_id.as_deref())
+        {
+            tracing::debug!(error = %err, "failed to publish displayed thread id to iTerm2");
+        }
     }
 
     pub(super) async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {

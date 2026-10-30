@@ -12,6 +12,7 @@ use std::io::stdout;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+use base64::Engine;
 use codex_terminal_detection::TerminalBackend;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
@@ -20,6 +21,7 @@ use crossterm::Command;
 use ratatui::crossterm::execute;
 
 static SESSION_STATUS_STATE: SessionStatusState = SessionStatusState::new();
+static ITERM_CURRENT_THREAD_ID: Mutex<Option<Option<String>>> = Mutex::new(None);
 static TERMINAL_PROGRAM_STATUS_SUPPORT: OnceLock<TerminalProgramStatusSupport> = OnceLock::new();
 
 // VTE 0.54 introduced a parser that safely ignores unknown OSC sequences.
@@ -180,7 +182,32 @@ pub(crate) fn clear_terminal_program_status() -> io::Result<()> {
                 emit_iterm_status: support.osc_21337,
             }
         )
-    })
+    })?;
+    set_iterm_current_thread_id(None)
+}
+
+/// Publishes the thread currently shown by the TUI for iTerm2 integrations.
+///
+/// iTerm2 exposes this as the `user.codex_thread_id` session variable, allowing
+/// scripts and status-bar components to look up metadata for the selected thread.
+pub(crate) fn set_iterm_current_thread_id(thread_id: Option<&str>) -> io::Result<()> {
+    if cfg!(test) || !current_terminal_program_status_support().osc_21337 {
+        return Ok(());
+    }
+
+    let mut last_thread_id = ITERM_CURRENT_THREAD_ID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let next_thread_id = thread_id.map(str::to_owned);
+    if *last_thread_id == Some(next_thread_id.clone()) {
+        return Ok(());
+    }
+
+    let encoded_value =
+        base64::engine::general_purpose::STANDARD.encode(thread_id.unwrap_or_default().as_bytes());
+    execute!(stdout(), SetItermUserVariable { encoded_value })?;
+    *last_thread_id = Some(next_thread_id);
+    Ok(())
 }
 
 /// Forgets the cached state after another process has owned the terminal.
@@ -189,6 +216,9 @@ pub(crate) fn clear_terminal_program_status() -> io::Result<()> {
 /// lifecycle state did not change during the handoff.
 pub(crate) fn invalidate_terminal_program_status() {
     SESSION_STATUS_STATE.invalidate();
+    *ITERM_CURRENT_THREAD_ID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 fn sanitize_iterm_session_detail(detail: &str) -> String {
@@ -288,6 +318,33 @@ impl Command for SetTerminalProgramStatus<'_> {
 #[derive(Clone, Copy, Debug)]
 struct ClearTerminalProgramStatus {
     emit_iterm_status: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SetItermUserVariable {
+    encoded_value: String,
+}
+
+impl Command for SetItermUserVariable {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(
+            f,
+            "\x1b]1337;SetUserVar=codex_thread_id={}\x07",
+            self.encoded_value
+        )
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
+            "tried to set an iTerm2 user variable using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
 }
 
 impl Command for ClearTerminalProgramStatus {
